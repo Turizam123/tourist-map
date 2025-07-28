@@ -1,0 +1,180 @@
+
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Туристическа карта с Тракер</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    html, body {
+      margin: 0; padding: 0; height: 100%; font-family: sans-serif;
+    }
+    #map { height: 100%; width: 100%; }
+    nav {
+      position: absolute; top: 0; left: 0; right: 0;
+      background: rgba(255,255,255,0.95);
+      z-index: 1000; display: flex; flex-wrap: wrap;
+      justify-content: space-between; align-items: center;
+      padding: 0.5em; font-size: clamp(12px, 2vw, 18px);
+    }
+    nav button {
+      margin: 0.2em; padding: 0.5em 1em;
+      background: #007BFF; color: white;
+      border: none; border-radius: 5px; cursor: pointer;
+      font-size: inherit;
+    }
+    #stats {
+      position: absolute; bottom: 0; left: 0; right: 0;
+      background: rgba(255,255,255,0.9);
+      padding: 0.5em; font-size: clamp(12px,2vw,16px);
+      z-index: 999;
+    }
+  </style>
+</head>
+<body>
+  <nav>
+    <div><strong>Туристическа карта</strong></div>
+    <div>
+      <button onclick="startDrawing()">Маршрут</button>
+      <button onclick="stopDrawing()">Стоп</button>
+      <button onclick="clearRoute()">Изчисти</button>
+      <button onclick="downloadGPX()">GPX</button>
+      <button onclick="centerMap()">📍 GPS</button>
+      <button onclick="toggleHuts()">🏠 Хижи</button>
+    </div>
+  </nav>
+
+  <div id="map"></div>
+  <div id="stats">Разстояние: 0 км | Време: 0 ч | Средна скорост: 0 км/ч</div>
+
+  
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet-rotatedmarker@0.2.0/leaflet.rotatedMarker.js"></script>
+
+  <script>
+    const map = L.map('map').setView([42.75, 25.5], 8);
+    L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
+      maxZoom: 17,
+      attribution: '&copy; OpenTopoMap'
+    }).addTo(map);
+
+    let route = JSON.parse(localStorage.getItem('route')) || [];
+    let drawing = false;
+    let routeLine = L.polyline(route, { color: 'red' }).addTo(map);
+    let startTime = new Date(localStorage.getItem('startTime')) || new Date();
+    if (route.length > 0) updateStats();
+
+    function startDrawing() {
+      drawing = true;
+      route = [];
+      routeLine.setLatLngs([]);
+      startTime = new Date();
+      localStorage.setItem('startTime', startTime);
+    }
+
+    function stopDrawing() { drawing = false; }
+
+    function clearRoute() {
+      route = [];
+      routeLine.setLatLngs([]);
+      localStorage.removeItem('route');
+      document.getElementById("stats").textContent = "Разстояние: 0 км | Време: 0 ч | Средна скорост: 0 км/ч | Надм. вис.: - м";
+    }
+
+    function downloadGPX() {
+      const gpx = '<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="TouristMap">\n' +
+        route.map(p => `  <trkpt lat="${p.lat}" lon="${p.lng}" />`).join('\n') + '\n</gpx>';
+      const blob = new Blob([gpx], { type: 'application/gpx+xml' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'route.gpx';
+      a.click();
+    }
+
+    function updateStats() {
+      let dist = 0;
+      for (let i = 1; i < route.length; i++) {
+        dist += route[i - 1].distanceTo(route[i]);
+      }
+      const duration = (new Date() - new Date(startTime)) / 3600000;
+      const km = (dist / 1000).toFixed(2);
+      const speed = duration > 0 ? (km / duration).toFixed(2) : 0;
+      document.getElementById("stats").innerText =
+        `Разстояние: ${km} км | Време: ${duration.toFixed(2)} ч | Средна скорост: ${speed} км/ч`;
+    }
+
+    let currentPos = null;
+    let trackerMarker = null;
+let lastHeading = 0;
+
+    if ('geolocation' in navigator) {
+      navigator.geolocation.watchPosition(
+        pos => {
+          const { latitude, longitude } = pos.coords;
+          const point = L.latLng(latitude, longitude);
+          currentPos = point;
+
+          
+          if (trackerMarker) {
+            if (pos.coords.heading !== null) {
+              lastHeading = pos.coords.heading;
+            }
+            trackerMarker.setLatLng(point);
+            trackerMarker.setRotationAngle(lastHeading);
+
+            trackerMarker.setLatLng(point);
+          } else {
+            trackerMarker = L.marker(point, {rotationAngle: 0, rotationOrigin: "center"}).addTo(map).bindPopup("Вие сте тук").openPopup();
+          }
+
+          if (drawing) {
+            route.push(point);
+            routeLine.setLatLngs(route);
+            updateStats();
+            localStorage.setItem('route', JSON.stringify(route));
+          }
+        },
+        err => console.error('Грешка при GPS:', err),
+        { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
+      );
+    }
+
+    function centerMap() {
+      if (currentPos) map.setView(currentPos, 14);
+    }
+
+    const hutIcon = L.icon({
+      iconUrl: 'https://cdn-icons-png.flaticon.com/512/854/854878.png',
+      iconSize: [24, 24], iconAnchor: [12, 12]
+    });
+    const huts = [
+      { name: 'Хижа Рай', lat: 42.6961, lon: 24.9314 },
+      { name: 'Хижа Мальовица', lat: 42.185, lon: 23.327 }
+    ];
+    let hutMarkers = [];
+    let hutsVisible = true;
+    huts.forEach(h => {
+      const marker = L.marker([h.lat, h.lon], { icon: hutIcon }).bindPopup(h.name);
+      marker.addTo(map);
+      hutMarkers.push(marker);
+    });
+
+    function toggleHuts() {
+      hutsVisible = !hutsVisible;
+      hutMarkers.forEach(m => hutsVisible ? m.addTo(map) : map.removeLayer(m));
+    }
+  </script>
+</body>
+</html>
+
+  <script>
+    let dark = false;
+    function toggleTheme() {
+      dark = !dark;
+      map.remove();
+      document.body.innerHTML = document.body.innerHTML.replace('<div id="map"></div>', '<div id="map"></div>');
+      setTimeout(() => location.reload(), 100);
+    }
+  </script>
